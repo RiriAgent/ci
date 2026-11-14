@@ -21,7 +21,7 @@ on:
       mode:
         description: >-
           `build-only` uploads the verified asset set as the workflow artifact
-          `release-assets`; `publish` additionally publishes it as the GitHub
+          `ci-release-<attempt>-<random>-assets`; `publish` additionally publishes it as the GitHub
           Release of `tag` (caller needs `contents: write`).
         type: string
         required: true
@@ -58,6 +58,7 @@ jobs:
       revision: ${{ steps.parse.outputs.revision }}
       mode: ${{ steps.parse.outputs.mode }}
       tag: ${{ steps.parse.outputs.tag }}
+      artifact-prefix: ${{ steps.parse.outputs.artifact-prefix }}
     steps:
       - name: Parse inputs
         id: parse
@@ -117,6 +118,8 @@ jobs:
             echo "revision=$revision"
             echo "mode=$IN_MODE"
             echo "tag=$IN_TAG"
+            # Workflow artifacts are scoped to the caller's run; a per-call prefix keeps two calls in one run apart.
+            echo "artifact-prefix=ci-release-$GITHUB_RUN_ATTEMPT-$(openssl rand -hex 4)"
           } >>"$GITHUB_OUTPUT"
 
   build:
@@ -143,9 +146,12 @@ jobs:
       - name: Create the empty release directory
         run: |
           set -euo pipefail
-          dir="$RUNNER_TEMP/ci-release-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$CI_RELEASE_PLATFORM"
-          mkdir "$dir"
-          echo "CI_RELEASE_DIR=$dir" >>"$GITHUB_ENV"
+          # The artifact root holds one directory per platform, so every platform keeps its own
+          # directory when the assemble job downloads them together.
+          upload="$RUNNER_TEMP/ci-release-upload"
+          mkdir -p "$upload/$CI_RELEASE_PLATFORM"
+          echo "UPLOAD_DIR=$upload" >>"$GITHUB_ENV"
+          echo "CI_RELEASE_DIR=$upload/$CI_RELEASE_PLATFORM" >>"$GITHUB_ENV"
 
       - name: Install mise and repository toolchain
         uses: jdx/mise-action@main
@@ -183,10 +189,10 @@ jobs:
       - name: Upload platform assets
         uses: actions/upload-artifact@main
         with:
-          name: ci-release-${{ matrix.platform.name }}
-          path: ${{ env.CI_RELEASE_DIR }}
+          name: ${{ needs.parse.outputs.artifact-prefix }}-${{ matrix.platform.name }}
+          path: ${{ env.UPLOAD_DIR }}
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
 
   assemble:
     needs: [parse, build]
@@ -207,7 +213,8 @@ jobs:
       - name: Download platform assets
         uses: actions/download-artifact@main
         with:
-          pattern: ci-release-*
+          pattern: ${{ needs.parse.outputs.artifact-prefix }}-*
+          merge-multiple: true
           path: ${{ runner.temp }}/ci-release-platforms
 
       - name: Assemble assets and SHA256SUMS
@@ -221,7 +228,7 @@ jobs:
           : >"$RUNNER_TEMP/ci-release-by-platform"
           status=0
           for name in $(jq -r '.[].name' <<<"$PLATFORMS"); do
-            dir="$platforms_dir/ci-release-$name"
+            dir="$platforms_dir/$name"
             [ -d "$dir" ] || { echo "::error title=assets::no assets downloaded for platform $name"; status=1; continue; }
             while IFS= read -r -d '' file; do
               base=${file##*/}
@@ -237,7 +244,8 @@ jobs:
           done
           [ "$status" = 0 ]
           cd "$assets_dir"
-          find . -mindepth 1 -maxdepth 1 -type f -printf '%f\0' | LC_ALL=C sort -z | xargs -0 sha256sum >SHA256SUMS
+          find . -mindepth 1 -maxdepth 1 -type f -printf '%f\0' | LC_ALL=C sort -z | xargs -0 sha256sum >"$RUNNER_TEMP/SHA256SUMS"
+          mv "$RUNNER_TEMP/SHA256SUMS" SHA256SUMS
           sha256sum --check SHA256SUMS
           {
             echo "assets<<CI_ASSETS_EOF"
@@ -248,7 +256,7 @@ jobs:
       - name: Upload the verified asset set
         uses: actions/upload-artifact@main
         with:
-          name: release-assets
+          name: ${{ needs.parse.outputs.artifact-prefix }}-assets
           path: ${{ env.ASSETS_DIR }}
           if-no-files-found: error
 
