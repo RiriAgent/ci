@@ -1,7 +1,2 @@
-[tools]
-"aqua:rhysd/actionlint" = "latest"
-shellcheck = "latest"
-
 [tasks.check]
-description = "Lint every workflow in .github/workflows"
-run = "actionlint"
+run = "echo 'selftest check task: failing on purpose with exit 3'; exit 3"
