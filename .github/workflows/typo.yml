@@ -1,0 +1,7 @@
+name: typo
+on: workflow_dispatch
+jobs:
+  broken:
+    runs_on: ubuntu-24.04
+    steps:
+      - run: echo never
