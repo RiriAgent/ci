@@ -1,0 +1,13 @@
+name: selftest-fork
+
+on: pull_request
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    uses: mouriya-devops/ci/.github/workflows/release-artifact.yml@main
+    with:
+      platforms: '[{"name":"amd64","runs-on":["ubuntu-24.04"]},{"name":"arm64","runs-on":["self-hosted","linux"]}]'
+      mode: build-only
